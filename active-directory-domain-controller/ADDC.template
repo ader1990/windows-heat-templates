@@ -24,23 +24,11 @@
     },
 
     "DomainName": {
-      "Default": "cloudbase.local",
+      "Default": "cloudbase",
       "Description" : "The domain name",
       "Type": "String",
       "MinLength": "3",
       "MaxLength": "256",
-      "AllowedPattern" : "[A-Za-z0-9]+(?=[\\.\\-][a-zA-Z0-9])*\\.[a-zA-z09]+",
-      "ConstraintDescription" : "must be a valid DNS name."
-    },
-
-    "DomainNetbiosName": {
-      "Default": "cloudbase",
-      "Description" : "The Netbios domain name",
-      "Type": "String",
-      "MinLength": "1",
-      "MaxLength": "15",
-      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
-      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
     },
 
     "SafeModeAdministratorPassword": {
@@ -70,11 +58,33 @@
       "m1.sminy" :  { "Arch" : "64" }
     },
     "VersionArch2Image": {
-      "WS12R2" : { "64" : "Windows Server 2012 R2 Std Eval VHD" }
+      "WS12R2" : { "64" : "returncodefix" }
     }
   },
 
-  "Resources" : {
+  "Resources" : { 
+    "EIP": {
+    "Type" : "AWS::EC2::EIP",
+    "Properties":{
+          "Domain":"vpc",
+          "InstanceId":{
+              "Ref":"DomainController"
+              }
+          }
+    }, 
+    "ADWaitCondition": {
+        "DependsOn": "DomainController",
+        "Properties": {
+            "Handle": {
+                  "Ref": "ADWaitHandle"
+                },
+            "Timeout": "3600"
+        },
+        "Type": "AWS::CloudFormation::WaitCondition"
+    },
+    "ADWaitHandle": {
+        "Type": "AWS::CloudFormation::WaitConditionHandle"
+    },
     "DomainController": {
       "Type": "AWS::EC2::Instance",
       "Properties": {
@@ -85,17 +95,40 @@
         "KeyName"        : { "Ref" : "KeyName" },
         "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
           "#ps1_sysnative\n",
-          "$ErrorActionPreference = 'Stop'\n",
+          "$rebootAndExecutePlugin = 1003\n",
+          "$domain = \"",
+                                {
+                                    "Ref": "DomainName"
+                                },
+          "\"\n",
+          "$waitHandleUrl = \"",
+                                {
+                                    "Ref": "ADWaitHandle"
+                                },
+          "\"\n",
+          "$password = \"",
+                                {
+                                    "Ref": "SafeModeAdministratorPassword"
+                                },
+          "\"\n",
+          "$ErrorActionPreference = 'Stop'\n", 
+          "if (!($env:userdomain -eq $domain))\n",
+          "{\n",
           "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools\n",
           "$user = [ADSI]'WinNT://./Administrator'\n",
           "# Disable user\n",
           "#$user.userflags = 2\n",
           "#$user.SetInfo()\n",
-          "$user.SetPassword('", { "Ref" : "SafeModeAdministratorPassword" }, "')\n",
+          "$user.SetPassword($password)\n",
           "Import-Module ADDSDeployment\n",
-          "$safeModePwd = (ConvertTo-SecureString '", { "Ref" : "SafeModeAdministratorPassword" }, "' -AsPlainText -Force)\n",
-          "Install-ADDSForest -DomainName '", { "Ref" : "DomainName" }, "' -DomainNetbiosName '", { "Ref" : "DomainNetbiosName" }, "' -SafeModeAdministratorPassword $safeModePwd -InstallDns -NoRebootOnCompletion -Force\n",
-          "exit 1001\n",
+          "$safeModePwd = (ConvertTo-SecureString $password -AsPlainText -Force)\n",
+          "Install-ADDSForest -DomainName $domain\".LOCAL\" -DomainNetbiosName $domain -SafeModeAdministratorPassword $safeModePwd -InstallDns -NoRebootOnCompletion -Force\n",
+          "exit $rebootAndExecutePlugin\n",
+          "}\n",
+          "else {\n",
+          "$cfnMessage = '{\"Status\" : \"SUCCESS\",\"Reason\" : \"Configuration Complete\",\"UniqueId\" : \"ID1234\",\"Data\" : \"ADDC has completed configuration.\"}'\n",
+          "Invoke-RestMethod -Method PUT -Uri $waitHandleUrl -Body $cfnMessage\n",
+          "}\n"
         ]]}}
       }
     }
